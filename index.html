@@ -118,6 +118,10 @@ h1,h2,h3{font-family:'Fredoka',sans-serif;}
 .savebtn{width:100%;border:none;background:var(--green);color:#fff;font-weight:900;font-size:17px;padding:12px;border-radius:14px;cursor:pointer;margin-top:6px;box-shadow:0 3px 0 #14532d;font-family:'Nunito',sans-serif;}
 .cancelbtn{width:100%;border:none;background:#e8ebf2;color:var(--mute);font-weight:900;font-size:14px;padding:9px;border-radius:12px;cursor:pointer;margin-top:6px;font-family:'Nunito',sans-serif;}
 .showall{display:block;margin:14px auto;border:2px solid var(--blue);background:#fff;color:var(--blue);font-weight:900;font-size:14px;padding:10px 20px;border-radius:999px;cursor:pointer;font-family:'Nunito',sans-serif;}
+.m-path{font-size:12px;font-weight:800;color:var(--mute);margin:6px 0 1px;text-align:center;}
+.kopick{font-weight:900;font-size:13.5px;color:var(--blue);margin:2px 0 6px;text-align:center;}
+.korow{display:flex;align-items:center;gap:8px;margin:6px 0;}
+.kosel{flex:1;font-family:'Nunito',sans-serif;font-weight:800;font-size:15px;padding:10px 8px;border:2px solid var(--blue);border-radius:12px;background:#fff;color:var(--ink);}
 
 /* standings tables */
 .gtable{background:#fff;border-radius:16px;padding:12px 12px 8px;margin-bottom:12px;box-shadow:0 3px 10px rgba(20,30,60,.08);border-top:6px solid var(--green);}
@@ -406,6 +410,15 @@ function loadManual(){
 }
 function saveScores(){ try{ localStorage.setItem("wc26-scores", JSON.stringify(scores)); }catch(e){} }
 
+// manual knockout matchups (this device): idx -> [codeA, codeB]
+let koTeams = {};
+function loadKO(){ try{ const v=localStorage.getItem("wc26-koteams"); if(v) koTeams=JSON.parse(v); }catch(e){} }
+function saveKO(){ try{ localStorage.setItem("wc26-koteams", JSON.stringify(koTeams)); }catch(e){} }
+function koCode(i,side){ const t=koTeams[String(i)]; return t&&t[side]?t[side]:null; }
+const ALL_CODES = Object.keys(N).filter(c=>c!=="TBD").sort((a,b)=>N[a].localeCompare(N[b]));
+function teamOptions(sel){ return `<option value="">— pick team —</option>`+
+  ALL_CODES.map(c=>`<option value="${c}" ${c===sel?"selected":""}>${F[c]} ${N[c]}</option>`).join(""); }
+
 const ALIAS = {};
 (function(){
   const extra = {KOR:["korea republic"],CZE:["czech republic"],USA:["united states","usa"],
@@ -422,6 +435,8 @@ function codeOf(team){ for(const k of [team.displayName,team.name,team.shortDisp
 function applyEvents(events){
   LIVE = {};
   const tz = {timeZone:"America/Chicago"};
+  // parse feed events into a normalized list
+  const P = [];
   for(const ev of (events||[])){
     try{
       const comp = ev.competitions && ev.competitions[0]; if(!comp) continue;
@@ -429,24 +444,50 @@ function applyEvents(events){
       const home = cs.find(c=>c.homeAway==="home")||cs[0];
       const away = cs.find(c=>c.homeAway==="away")||cs[1];
       const d = new Date(ev.date);
-      const ctDate = d.toLocaleDateString("en-CA", tz);
-      const ctTime = d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,...tz});
-      const state = ev.status && ev.status.type ? ev.status.type.state : "pre";
-      const detail = ev.status && ev.status.type ? (ev.status.type.shortDetail||"") : "";
-      const hc = codeOf(home.team||{}), ac2 = codeOf(away.team||{});
-      let idx = -1, a=parseInt(home.score)||0, b=parseInt(away.score)||0, A=hc, B=ac2;
-      // group stage: match by CT date + both team codes
-      if(hc && ac2){
-        idx = M.findIndex(m=>m[0]===ctDate && ((m[2]===hc&&m[3]===ac2)||(m[2]===ac2&&m[3]===hc)));
-        if(idx>=0 && M[idx][2]===ac2){ [a,b]=[b,a]; [A,B]=[B,A]; } // align to our order
-      }
-      // knockout: match by CT date + kickoff time
-      if(idx<0){
-        idx = M.findIndex(m=>m[0]===ctDate && m[1]===ctTime && m[9]!=="G");
-      }
-      if(idx<0 || state==="pre") { if(idx>=0 && state==="pre" && M[idx][2]==="TBD"){ LIVE[idx]={state:"pre",an:(home.team||{}).displayName,bn:(away.team||{}).displayName,ac:A,bc:B}; } continue; }
-      LIVE[idx] = {a,b,state,detail,an:(home.team||{}).displayName,bn:(away.team||{}).displayName,ac:A,bc:B};
+      P.push({
+        ctDate: d.toLocaleDateString("en-CA", tz),
+        ctTime: d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,...tz}),
+        state: ev.status && ev.status.type ? ev.status.type.state : "pre",
+        detail: ev.status && ev.status.type ? (ev.status.type.shortDetail||"") : "",
+        hc: codeOf(home.team||{}), ac2: codeOf(away.team||{}),
+        a: parseInt(home.score)||0, b: parseInt(away.score)||0,
+        an: (home.team||{}).displayName, bn: (away.team||{}).displayName
+      });
     }catch(e){}
+  }
+  const usedM = new Set(), usedP = new Set();
+  function place(idx,p,A,B,a,b){
+    if(p.state==="pre"){ if(M[idx][2]==="TBD") LIVE[idx]={state:"pre",an:p.an,bn:p.bn,ac:A,bc:B}; }
+    else LIVE[idx]={a,b,state:p.state,detail:p.detail,an:p.an,bn:p.bn,ac:A,bc:B};
+    usedM.add(idx);
+  }
+  // 1) group stage: match by CT date + both team codes
+  P.forEach((p,ei)=>{
+    if(!(p.hc&&p.ac2)) return;
+    const idx = M.findIndex((m,mi)=>!usedM.has(mi)&&m[0]===p.ctDate&&((m[2]===p.hc&&m[3]===p.ac2)||(m[2]===p.ac2&&m[3]===p.hc)));
+    if(idx<0) return;
+    let a=p.a,b=p.b,A=p.hc,B=p.ac2;
+    if(M[idx][2]===p.ac2){ [a,b]=[b,a]; [A,B]=[B,A]; } // align to our order
+    place(idx,p,A,B,a,b); usedP.add(ei);
+  });
+  // 2) knockout: exact CT date + kickoff time
+  P.forEach((p,ei)=>{
+    if(usedP.has(ei)) return;
+    const idx = M.findIndex((m,mi)=>!usedM.has(mi)&&m[0]===p.ctDate&&m[1]===p.ctTime&&m[9]!=="G");
+    if(idx<0) return;
+    place(idx,p,p.hc,p.ac2,p.a,p.b); usedP.add(ei);
+  });
+  // 3) knockout fallback: pair leftover same-day games by kickoff order
+  //    (so real teams still fill in even if the actual kickoff time drifted from our schedule)
+  const evByDate={}, slotByDate={};
+  P.forEach((p,ei)=>{ if(usedP.has(ei)) return; (evByDate[p.ctDate]=evByDate[p.ctDate]||[]).push({p,ei}); });
+  M.forEach((m,mi)=>{ if(usedM.has(mi)||m[9]==="G") return; (slotByDate[m[0]]=slotByDate[m[0]]||[]).push(mi); });
+  for(const date in evByDate){
+    const evs=evByDate[date].sort((x,y)=>x.p.ctTime.localeCompare(y.p.ctTime));
+    const slots=(slotByDate[date]||[]).sort((x,y)=>M[x][1].localeCompare(M[y][1]));
+    for(let k=0;k<Math.min(evs.length,slots.length);k++){
+      const {p,ei}=evs[k]; place(slots[k],p,p.hc,p.ac2,p.a,p.b); usedP.add(ei);
+    }
   }
 }
 async function fetchLive(){
@@ -470,10 +511,10 @@ function eff(i){
   return m||null;
 }
 function liveIn(i){ const L=LIVE[i]; return L && L.state==="in" ? L : null; }
-function liveNameA(m){ const L=LIVE[M.indexOf(m)]; return (m[2]==="TBD"&&L&&L.an)?L.an:nameA(m); }
-function liveNameB(m){ const L=LIVE[M.indexOf(m)]; return (m[3]==="TBD"&&L&&L.bn)?L.bn:nameB(m); }
-function liveFlagA(m){ const L=LIVE[M.indexOf(m)]; return (m[2]==="TBD"&&L&&L.ac)?F[L.ac]||"⚽":F[m[2]]; }
-function liveFlagB(m){ const L=LIVE[M.indexOf(m)]; return (m[3]==="TBD"&&L&&L.bc)?F[L.bc]||"⚽":F[m[3]]; }
+function liveNameA(m){ const i=M.indexOf(m),L=LIVE[i]; if(m[2]==="TBD"){ if(L&&L.an) return L.an; const c=koCode(i,0); if(c) return N[c]; } return nameA(m); }
+function liveNameB(m){ const i=M.indexOf(m),L=LIVE[i]; if(m[3]==="TBD"){ if(L&&L.bn) return L.bn; const c=koCode(i,1); if(c) return N[c]; } return nameB(m); }
+function liveFlagA(m){ const i=M.indexOf(m),L=LIVE[i]; if(m[2]==="TBD"){ if(L&&L.ac) return F[L.ac]||"⚽"; const c=koCode(i,0); if(c) return F[c]; } return F[m[2]]; }
+function liveFlagB(m){ const i=M.indexOf(m),L=LIVE[i]; if(m[3]==="TBD"){ if(L&&L.bc) return F[L.bc]||"⚽"; const c=koCode(i,1); if(c) return F[c]; } return F[m[3]]; }
 
 // ---------------- helpers ----------------
 function ampm(t){let[h,m]=t.split(":").map(Number);const ap=h>=12?"PM":"AM";h=h%12||12;return h+":"+String(m).padStart(2,"0")+" "+ap;}
@@ -499,11 +540,14 @@ function card(m){
   else if(s){ top = `<span class="finalpill">FINAL</span>`; sa=s[0]; sb=s[1]; }
   else { top = `<span class="m-time">🕐 ${ampm(m[1])}</span>`; }
   const scored = L||s;
+  const path = (ko && m[10] && (liveNameA(m)!==m[10][0] || liveNameB(m)!==m[10][1]))
+    ? `<div class="m-path">🔀 ${m[10][0]} &nbsp;vs&nbsp; ${m[10][1]}</div>` : "";
   return `<div class="match ${ko?"ko":""} ${usa?"usa":""}">
     <div class="m-top">${top}<span class="m-grp">${m[4]}</span></div>
     <div class="m-teams"><span class="m-flag">${liveFlagA(m)}</span><span class="m-name">${liveNameA(m)}</span>${scored?`<span class="m-score">${sa}</span>`:""}</div>
     <div class="m-vs">${scored?"—":"VS"}</div>
     <div class="m-teams"><span class="m-flag">${liveFlagB(m)}</span><span class="m-name">${liveNameB(m)}</span>${scored?`<span class="m-score">${sb}</span>`:""}</div>
+    ${path}
     <div class="m-bot"><span class="m-venue">📍 ${m[5]}, ${m[6]}</span><span>${chips}</span></div>
   </div>`;
 }
@@ -553,14 +597,17 @@ function renderSched(){
 }
 
 // ---------------- Scores tab ----------------
-let showAllDays=false, editing=-1, eA=0, eB=0;
-function toggleAllDays(){ showAllDays=!showAllDays; renderBoard(); 
+let showAllDays=false, editing=-1, eA=0, eB=0, eKA="", eKB="";
+function toggleAllDays(){ showAllDays=!showAllDays; renderBoard();
   document.getElementById("showallbtn").textContent = showAllDays?"Show recent days only ▴":"Show all match days ▾"; }
-function startEdit(i){ editing=i; const s=eff(i); eA=s?s[0]:0; eB=s?s[1]:0; renderBoard(); }
+function startEdit(i){ editing=i; const s=eff(i); eA=s?s[0]:0; eB=s?s[1]:0; eKA=koCode(i,0)||""; eKB=koCode(i,1)||""; renderBoard(); }
 function bump(side,n){ if(side==="a")eA=Math.max(0,Math.min(15,eA+n)); else eB=Math.max(0,Math.min(15,eB+n)); renderBoard(); }
+function setKO(side,v){ if(side==="a")eKA=v; else eKB=v; }
 function cancelEdit(){ editing=-1; renderBoard(); }
-function saveEdit(){ scores[String(editing)]=[eA,eB]; editing=-1; saveScores(); renderAll(); toast("✅ Score saved"); }
+function saveMatchup(){ if(!(eKA&&eKB)){ toast("Pick both teams first"); return; } koTeams[String(editing)]=[eKA,eKB]; editing=-1; saveKO(); renderAll(); toast("✅ Matchup saved"); }
+function saveEdit(){ const i=editing; if(M[i][2]==="TBD"&&eKA&&eKB){ koTeams[String(i)]=[eKA,eKB]; saveKO(); } scores[String(i)]=[eA,eB]; editing=-1; saveScores(); renderAll(); toast("✅ Score saved"); }
 function clearScore(i){ delete scores[String(i)]; editing=-1; saveScores(); renderAll(); toast("Score removed"); }
+function clearKO(i){ delete koTeams[String(i)]; delete scores[String(i)]; editing=-1; saveKO(); saveScores(); renderAll(); toast("Matchup cleared"); }
 
 let toastTimer=0;
 function toast(msg){
@@ -573,22 +620,30 @@ function toast(msg){
 function srow(m){
   const i=M.indexOf(m), s=eff(i), L=liveIn(i), usa=isUSA(m)||isPath(m);
   const auto = LIVE[i] && (LIVE[i].state==="post"||LIVE[i].state==="in");
+  const tbd = m[2]==="TBD";
   let inner;
   if(editing===i){
+    const picker = tbd ? `<div class="kopick">Who's playing? (set the matchup)</div>
+      <div class="korow"><select class="kosel" onchange="setKO('a',this.value)">${teamOptions(eKA)}</select></div>
+      <div class="korow"><select class="kosel" onchange="setKO('b',this.value)">${teamOptions(eKB)}</select></div>
+      <button class="savebtn" onclick="saveMatchup()">💾 Save matchup</button>
+      <div class="kopick" style="margin-top:12px;">Add the final score (optional):</div>` : "";
     inner = `<div class="editor">
+      ${picker}
       <div class="steprow"><span class="f">${liveFlagA(m)}</span><span class="n">${liveNameA(m)}</span>
         <button class="step minus" onclick="bump('a',-1)">−</button><span class="stepval">${eA}</span><button class="step plus" onclick="bump('a',1)">+</button></div>
       <div class="steprow"><span class="f">${liveFlagB(m)}</span><span class="n">${liveNameB(m)}</span>
         <button class="step minus" onclick="bump('b',-1)">−</button><span class="stepval">${eB}</span><button class="step plus" onclick="bump('b',1)">+</button></div>
       <button class="savebtn" onclick="saveEdit()">✅ Save final score</button>
-      ${scores[String(i)]?`<button class="cancelbtn" onclick="clearScore(${i})">Remove this score</button>`:""}
+      ${koTeams[String(i)]?`<button class="cancelbtn" onclick="clearKO(${i})">Clear this matchup</button>`
+        :(scores[String(i)]?`<button class="cancelbtn" onclick="clearScore(${i})">Remove this score</button>`:"")}
       <button class="cancelbtn" onclick="cancelEdit()">Cancel</button>
     </div>`;
   } else {
     const va = L?L.a:(s?s[0]:"–"), vb = L?L.b:(s?s[1]:"–");
     inner = `<div class="sline"><span class="f">${liveFlagA(m)}</span><span class="n">${liveNameA(m)}</span><span class="sc ${(L||s)?"":"dim"}">${va}</span></div>
       <div class="sline"><span class="f">${liveFlagB(m)}</span><span class="n">${liveNameB(m)}</span><span class="sc ${(L||s)?"":"dim"}">${vb}</span></div>
-      ${auto?"":`<button class="editbtn" onclick="startEdit(${i})">${s?"✏️ Fix score":"✏️ Enter score"}</button>`}`;
+      ${auto?"":`<button class="editbtn" onclick="startEdit(${i})">${tbd?"✏️ Set matchup":(s?"✏️ Fix score":"✏️ Enter score")}</button>`}`;
   }
   const tag = L ? `🔴 LIVE` : (s ? (auto?"FINAL · auto":"FINAL") : "📺 "+m[7]);
   return `<div class="srow ${usa?"usa":""}">
@@ -645,8 +700,10 @@ function renderRails(){
   const tk=todayKey(), recent=DAYS.filter(d=>d<=tk).slice(-2);
   const rel=new Set(["Group D"]);
   M.forEach(m=>{ if(m[9]==="G"&&recent.includes(m[0])) rel.add(m[4]); });
+  // during the knockout rounds (no recent group games) show every group's final table
+  const shown = rel.size>1 ? GROUPS.filter(([g])=>rel.has(g)) : GROUPS;
   document.getElementById("rail-standings").innerHTML =
-    GROUPS.filter(([g])=>rel.has(g)).map(([g,t])=>groupTableHTML(g,t)).join("");
+    shown.map(([g,t])=>groupTableHTML(g,t)).join("");
 }
 
 // ---------------- USA & Groups ----------------
@@ -696,7 +753,7 @@ function showTab(t){
   window.scrollTo(0,0);
 }
 function renderAll(){ renderDay(); renderSched(); renderBoard(); renderStandings(); renderUSA(); renderRails(); }
-loadManual(); initDay(); renderFilters(); renderAll(); renderGroups();
+loadManual(); loadKO(); initDay(); renderFilters(); renderAll(); renderGroups();
 tick(); tickUSA(); setInterval(tick,1000); setInterval(tickUSA,30000);
 fetchLive(); setInterval(fetchLive,60000);
 </script>
