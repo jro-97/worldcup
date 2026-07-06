@@ -97,6 +97,28 @@ h1,h2,h3{font-family:'Fredoka',sans-serif;}
 @media(min-width:880px){ .twocol{grid-template-columns:1fr 1fr;} }
 .colhead{background:var(--red);color:#fff;border-radius:14px;padding:10px 14px;font-family:'Fredoka',sans-serif;font-size:19px;font-weight:700;text-align:center;margin-bottom:10px;}
 .colhead.green{background:var(--green);}
+
+/* knockout bracket view */
+.segwrap{display:flex;gap:6px;margin:0 auto 12px;max-width:560px;}
+.segbtn{flex:1;border:2px solid var(--green);background:#fff;color:var(--green);font-weight:900;font-size:13.5px;padding:9px 4px;border-radius:999px;cursor:pointer;font-family:'Nunito',sans-serif;}
+.segbtn.on{background:var(--green);color:#fff;}
+.brsummary{background:var(--goldbg);color:#8a6914;border-radius:12px;padding:9px 12px;font-weight:900;font-size:13.5px;text-align:center;margin-bottom:12px;line-height:1.5;}
+.brhead{background:var(--gold);color:#fff;border-radius:10px;padding:6px 12px;font-family:'Fredoka',sans-serif;font-weight:700;font-size:15.5px;margin:16px 0 8px;display:flex;justify-content:space-between;align-items:center;}
+.brhead.now{background:var(--green);box-shadow:0 0 0 3px var(--greenbg);}
+.brcount{font-size:11.5px;font-weight:800;background:rgba(255,255,255,.28);padding:1px 9px;border-radius:999px;}
+.brgame{background:#fff;border-radius:12px;padding:8px 11px;margin-bottom:8px;box-shadow:0 2px 8px rgba(20,30,60,.07);border-left:5px solid var(--gold);}
+.brgame.usa{background:var(--redbg);border-left-color:var(--red);}
+.brgame.live{border-left-color:var(--red);}
+.brmeta{display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:var(--mute);margin-bottom:4px;}
+.brteam{display:flex;align-items:center;gap:8px;padding:3px 0;}
+.brteam .f{font-size:20px;}
+.brteam .bn{flex:1;font-weight:800;font-size:14.5px;}
+.brteam .bs{font-family:'Fredoka',sans-serif;font-weight:700;font-size:18px;color:var(--mute);min-width:16px;text-align:center;}
+.brteam.win .bn{color:var(--green);font-weight:900;}
+.brteam.win .bs{color:var(--green);}
+.brteam.lose{opacity:.5;}
+.brteam .chk{color:var(--green);font-weight:900;font-size:15px;}
+.brpk{font-size:11px;font-weight:800;color:var(--gold);text-align:right;margin-top:2px;}
 .scoreday{font-family:'Fredoka',sans-serif;font-weight:600;font-size:15.5px;color:var(--blue);margin:14px 2px 6px;}
 .srow{background:#fff;border-radius:14px;padding:10px 12px;margin-bottom:8px;box-shadow:0 2px 8px rgba(20,30,60,.07);}
 .srow.usa{background:var(--redbg);}
@@ -245,9 +267,16 @@ h1,h2,h3{font-family:'Fredoka',sans-serif;}
       <button class="showall" id="showallbtn" onclick="toggleAllDays()">Show all match days ▾</button>
     </div>
     <div>
-      <div class="colhead green">📊 Group Standings</div>
-      <p style="font-weight:800;font-size:13px;color:var(--mute);text-align:center;margin-bottom:10px;">Win = 3 pts &middot; Tie = 1 pt &middot; Top 2 advance (green) &middot; #&hairsp;= FIFA world ranking</p>
-      <div id="standings"></div>
+      <div class="colhead green">📊 Standings &amp; Bracket</div>
+      <div class="segwrap">
+        <button class="segbtn" id="seg-bracket" onclick="setStandView('bracket')">🏆 Knockout Bracket</button>
+        <button class="segbtn" id="seg-groups" onclick="setStandView('groups')">📋 Group Tables</button>
+      </div>
+      <div id="bracketwrap"><div id="bracket"></div></div>
+      <div id="groupswrap">
+        <p style="font-weight:800;font-size:13px;color:var(--mute);text-align:center;margin-bottom:10px;">Win = 3 pts &middot; Tie = 1 pt &middot; Top 2 advance (green) &middot; #&hairsp;= FIFA world ranking</p>
+        <div id="standings"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -684,6 +713,66 @@ function renderStandings(){
   document.getElementById("standings").innerHTML=GROUPS.map(([g,t])=>groupTableHTML(g,t)).join("");
 }
 
+// ---------------- Knockout bracket ----------------
+const KO_ROUNDS = [["R32","Round of 32"],["R16","Round of 16"],["QF","Quarterfinals"],["SF","Semifinals & 3rd Place"],["FINAL","The Final"]];
+function koScore(i){ const L=liveIn(i); if(L) return [L.a,L.b]; return eff(i); }
+function koWinner(i){ const sc=koScore(i); if(!sc) return 0; if(sc[0]>sc[1]) return 1; if(sc[1]>sc[0]) return 2; return 0; }
+function koStageStatus(st){
+  const gs=M.map((m,i)=>({m,i})).filter(x=>x.m[9]===st);
+  const played=gs.filter(x=>koScore(x.i)).length;
+  return {total:gs.length, played, gs};
+}
+function bracketHTML(){
+  const tk=todayKey();
+  // current round = first knockout round that still has an unplayed game
+  let nowRound="";
+  for(const [st,label] of KO_ROUNDS){ const s=koStageStatus(st); if(s.total && s.played<s.total){ nowRound=label; break; } }
+  // any knockout started yet?
+  const started = KO_ROUNDS.some(([st])=>koStageStatus(st).played>0) ||
+    M.some(m=>m[9]!=="G" && m[0]<=tk);
+  if(!started){
+    return `<div class="brsummary">🏆 The knockout bracket unlocks after the group stage.<br>Group standings are in the <b>Group Tables</b> tab above.</div>`;
+  }
+  let html="";
+  if(nowRound) html+=`<div class="brsummary">⚽ <b>Current round:</b> ${nowRound}<br><span style="font-weight:800;">Winners advance · tap a team's game on the Scoreboard to fix a result</span></div>`;
+  else html+=`<div class="brsummary">🏆 <b>Tournament complete!</b> Scroll for the full knockout path.</div>`;
+  for(const [st,label] of KO_ROUNDS){
+    const {total,played,gs}=koStageStatus(st);
+    if(!total) continue;
+    const isNow = label===nowRound;
+    html+=`<div class="brhead ${isNow?"now":""}">${isNow?"▶ ":""}${label}<span class="brcount">${played}/${total} played</span></div>`;
+    for(const {m,i} of gs){
+      const L=liveIn(i), sc=koScore(i), win=koWinner(i);
+      const na=liveNameA(m), nb=liveNameB(m), fa=liveFlagA(m), fb=liveFlagB(m);
+      const sa=sc?sc[0]:"", sb=sc?sc[1]:"";
+      const status = L?`🔴 LIVE ${L.detail||""}`:(sc?"FINAL":`${prettyDate(m[0]).date} · ${ampm(m[1])}`);
+      const pk = (sc && sc[0]===sc[1]) ? `<div class="brpk">level — decided on penalties</div>` : "";
+      html+=`<div class="brgame ${isUSA(m)||isPath(m)?"usa":""} ${L?"live":""}">
+        <div class="brmeta"><span>${m[4]} · 📍 ${m[6]}</span><span>${status}</span></div>
+        <div class="brteam ${win===1?"win":(win===2?"lose":"")}"><span class="f">${fa}</span><span class="bn">${na}</span><span class="bs">${sa}</span>${win===1?'<span class="chk">✓</span>':""}</div>
+        <div class="brteam ${win===2?"win":(win===1?"lose":"")}"><span class="f">${fb}</span><span class="bn">${nb}</span><span class="bs">${sb}</span>${win===2?'<span class="chk">✓</span>':""}</div>
+        ${pk}
+      </div>`;
+    }
+  }
+  return html;
+}
+function renderBracket(){ document.getElementById("bracket").innerHTML=bracketHTML(); }
+
+// which right-column view: 'bracket' or 'groups' (auto-defaults by tournament stage)
+let standView = null;
+function defaultStandView(){
+  const tk=todayKey();
+  return M.some(m=>m[9]!=="G" && m[0]<=tk) ? "bracket" : "groups";
+}
+function setStandView(v){
+  standView=v;
+  document.getElementById("bracketwrap").style.display = v==="bracket"?"block":"none";
+  document.getElementById("groupswrap").style.display  = v==="groups"?"block":"none";
+  document.getElementById("seg-bracket").classList.toggle("on", v==="bracket");
+  document.getElementById("seg-groups").classList.toggle("on", v==="groups");
+}
+
 // desktop side rails: latest scores (left) + relevant standings (right)
 function renderRails(){
   const items=[];
@@ -697,13 +786,17 @@ function renderRails(){
       <div class="sline"><span class="f">${liveFlagB(m)}</span><span class="n">${liveNameB(m)}</span><span class="sc">${b}</span></div>
     </div>`;
   }).join("") || `<div class="railrow"><div class="meta"><span>No scores yet — check back after the first final whistle!</span></div></div>`;
-  const tk=todayKey(), recent=DAYS.filter(d=>d<=tk).slice(-2);
+  const tk=todayKey();
+  // once the knockouts begin, the rail shows the live bracket; before that, the relevant groups
+  if(M.some(m=>m[9]!=="G" && m[0]<=tk)){
+    document.getElementById("rail-standings").innerHTML = bracketHTML();
+    return;
+  }
+  const recent=DAYS.filter(d=>d<=tk).slice(-2);
   const rel=new Set(["Group D"]);
   M.forEach(m=>{ if(m[9]==="G"&&recent.includes(m[0])) rel.add(m[4]); });
-  // during the knockout rounds (no recent group games) show every group's final table
-  const shown = rel.size>1 ? GROUPS.filter(([g])=>rel.has(g)) : GROUPS;
   document.getElementById("rail-standings").innerHTML =
-    shown.map(([g,t])=>groupTableHTML(g,t)).join("");
+    GROUPS.filter(([g])=>rel.has(g)).map(([g,t])=>groupTableHTML(g,t)).join("");
 }
 
 // ---------------- USA & Groups ----------------
@@ -752,8 +845,9 @@ function showTab(t){
   }
   window.scrollTo(0,0);
 }
-function renderAll(){ renderDay(); renderSched(); renderBoard(); renderStandings(); renderUSA(); renderRails(); }
+function renderAll(){ renderDay(); renderSched(); renderBoard(); renderStandings(); renderBracket(); renderUSA(); renderRails(); }
 loadManual(); loadKO(); initDay(); renderFilters(); renderAll(); renderGroups();
+setStandView(defaultStandView());
 tick(); tickUSA(); setInterval(tick,1000); setInterval(tickUSA,30000);
 fetchLive(); setInterval(fetchLive,60000);
 </script>
